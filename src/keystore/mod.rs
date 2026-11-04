@@ -1,64 +1,80 @@
 //Store BIP39 Mnemonic to encrypted file
-use argon2::{
-    Argon2,
-    password_hash::{PasswordHasher, phc::SaltString},
-};
+use argon2::{Argon2, password_hash::generate_salt};
 use chacha20poly1305::{
     ChaCha20Poly1305, Key, Nonce,
-    aead::{Aead, KeyInit},
+    aead::{Aead, Generate, KeyInit},
 };
+use ssi::dids::key;
 
-type Mnemonic = Vec<String>;
+pub type Mnemonic = Vec<String>;
 
-trait KeyStoreTrait {
+pub const SALT_LEN: usize = 16;
+pub const NONCE_LEN: usize = 12;
+
+pub trait KeyStoreTrait {
     fn save(
         &mut self,
         password: &str,
         mnemonic: &Mnemonic,
     ) -> Result<(), Box<dyn std::error::Error>>;
-    fn load(&mut self, password: &str) -> Result<String, Box<dyn std::error::Error>>;
-    fn _encrypt(&self, password: &str, mnemonic: &Mnemonic) -> Vec<u8> {
-        let salt = SaltString::generate();
-        let argon2 = Argon2::default();
-        let pass_hash = argon2.hash_password(password.as_bytes()).unwrap();
-        let mut bytes = pass_hash.to_string().as_bytes().to_vec();
 
-        let cipher = ChaCha20Poly1305::new(&Key::from_slice(&bytes));
-        let nonce = Nonce::from_slice(&salt.as_bytes());
-        let encrypted = cipher
+    fn load(&mut self, password: &str) -> Result<String, Box<dyn std::error::Error>>;
+
+    fn _encrypt(
+        &self,
+        password: &str,
+        mnemonic: &Mnemonic,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let salt = generate_salt();
+        let mut key = [0u8; 32];
+        Argon2::default()
+            .hash_password_into(password.as_bytes(), &salt, &mut key)
+            .map_err(|e| format!("Argon2 KDF error: {e}"))?;
+
+        let cipher = ChaCha20Poly1305::new(&Key::from(key));
+        let nonce = Nonce::generate();
+        let ciphertext = cipher
             .encrypt(&nonce, mnemonic.join(" ").as_bytes())
-            .unwrap();
-        bytes.extend(encrypted);
-        bytes
+            .map_err(|e| format!("Encryption error: {e}"))?;
+
+        let mut bytes = Vec::with_capacity(SALT_LEN + NONCE_LEN + ciphertext.len());
+        bytes.extend_from_slice(&salt);
+        bytes.extend_from_slice(nonce.as_slice());
+        bytes.extend_from_slice(&ciphertext);
+        Ok(bytes)
     }
+
     fn _decrypt(
         &self,
         password: &str,
-        bytes: &[u8],
+        encrypted_bytes: &[u8],
     ) -> Result<Mnemonic, Box<dyn std::error::Error>> {
-        let salt = SaltString::generate();
-        let argon2 = Argon2::default();
-        let pass_hash = argon2.hash_password(password.as_bytes()).unwrap();
-        let mut bytes = pass_hash.to_string().as_bytes().to_vec();
+        if encrypted_bytes.len() < SALT_LEN + NONCE_LEN {
+            return Err("Encrypted data is too short".into());
+        }
 
-        let cipher = ChaCha20Poly1305::new(&Key::from_slice(&bytes));
-        let nonce = Nonce::from_slice(&salt.as_bytes());
-        let payload = &bytes[32..];
-        let decrypted = cipher.decrypt(&nonce, payload).unwrap();
-        let mnemonic: Mnemonic = String::from_utf8(decrypted)
-            .unwrap()
+        let salt = &encrypted_bytes[..SALT_LEN];
+        let nonce = Nonce::try_from(&encrypted_bytes[SALT_LEN..SALT_LEN + NONCE_LEN])?;
+        let ciphertext = &encrypted_bytes[SALT_LEN + NONCE_LEN..];
+
+        let mut key = [0u8; 32];
+        Argon2::default()
+            .hash_password_into(password.as_bytes(), salt, &mut key)
+            .map_err(|e| format!("Argon2 KDF error: {e}"))?;
+
+        let cipher = ChaCha20Poly1305::new(&Key::from(key));
+        let decrypted = cipher
+            .decrypt(&nonce, ciphertext)
+            .map_err(|e| format!("Decryption error: {e}"))?;
+
+        let mnemonic_str = String::from_utf8(decrypted)?;
+        let mnemonic = mnemonic_str
             .split_whitespace()
             .map(|s| s.to_string())
-            .collect();
+            .collect::<Mnemonic>();
         Ok(mnemonic)
     }
 }
-
-// #[derive(Debug, Clone)]
-// pub struct KeyStoreFile {
-//     path: std::path::PathBuf,
-//     bytes: Vec<u8>,
-// }
 
 #[derive(Debug, Clone)]
 pub struct KeyStoreMemory {
@@ -71,7 +87,7 @@ impl KeyStoreTrait for KeyStoreMemory {
         password: &str,
         mnemonic: &Mnemonic,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.bytes = self._encrypt(password, mnemonic);
+        self.bytes = self._encrypt(password, mnemonic)?;
         Ok(())
     }
 
@@ -93,7 +109,7 @@ impl Default for KeyStoreMemory {
 //         password: &str,
 //         mnemonic: &Mnemonic,
 //     ) -> Result<(), Box<dyn std::error::Error>> {
-//         self.bytes = self._encrypt(password, mnemonic);
+//         self.bytes = self._encrypt(password, mnemonic)?;
 //         std::fs::write(&self.path, &self.bytes)?;
 //         Ok(())
 //     }
@@ -107,16 +123,23 @@ impl Default for KeyStoreMemory {
 
 #[cfg(test)]
 mod tests {
-    use crate::keystore::KeyStoreMemory;
-    use crate::keystore::KeyStoreTrait;
-    use crate::keystore::Mnemonic;
+    use super::*;
 
     #[test]
     fn test_save_load() {
-        let mut keystore = crate::keystore::KeyStoreMemory::default();
-        let mnemonic = crate::keystore::Mnemonic::default();
-        keystore.save("", &mnemonic).unwrap();
-        let loaded = keystore.load("").unwrap();
+        let mut keystore = KeyStoreMemory::default();
+        let mnemonic: Mnemonic = vec!["slite".to_string(), "test".to_string(), "rust".to_string()];
+        keystore.save("password", &mnemonic).unwrap();
+        let loaded = keystore.load("password").unwrap();
         assert_eq!(loaded, mnemonic.join(" ").to_string());
+    }
+
+    #[test]
+    fn test_wrong_password_fails() {
+        let mut keystore = KeyStoreMemory::default();
+        let mnemonic: Mnemonic = vec!["slite".to_string(), "test".to_string(), "rust".to_string()];
+        keystore.save("password", &mnemonic).unwrap();
+        let result = keystore.load("wrong_password");
+        assert!(result.is_err());
     }
 }
