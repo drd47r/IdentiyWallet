@@ -1,5 +1,4 @@
 use std::str::FromStr;
-
 //Store BIP39 Mnemonic to encrypted file
 use argon2::{Argon2, password_hash::generate_salt};
 use chacha20poly1305::{
@@ -54,45 +53,6 @@ impl Store for StoreFile {
 }
 
 pub trait KeyStoreTrait {
-    fn save<S>(
-        &mut self,
-        password: &str,
-        mnemonic: &Mnemonic,
-        store: Option<&mut S>,
-    ) -> Result<(), Box<dyn std::error::Error>>
-    where
-        S: Store,
-    {
-        let bytes = self._encrypt(password, mnemonic)?;
-        match store {
-            Some(store) => {
-                store.write(&bytes)?;
-                return Ok(());
-            }
-            None => {
-                return Err("No store provided".into());
-            }
-        };
-    }
-
-    fn load<S>(
-        &mut self,
-        password: &str,
-        store: Option<&S>,
-    ) -> Result<String, Box<dyn std::error::Error>>
-    where
-        S: Store,
-    {
-        let bytes = match store {
-            Some(store) => store.read()?,
-            None => {
-                return Err("No store provided".into());
-            }
-        };
-        let mnemonic = self._decrypt(password, &bytes)?;
-        Ok(mnemonic.join(" ").to_string())
-    }
-
     fn _encrypt(
         &self,
         password: &str,
@@ -151,12 +111,40 @@ pub trait KeyStoreTrait {
 
 #[derive(Default, Clone, Debug)]
 pub struct KeyVault<S: Store> {
-    pub store: S,
+    pub store: Option<S>,
 }
 
 impl<S: Store> KeyVault<S> {
     pub fn new(store: S) -> Self {
-        Self { store }
+        Self { store: Some(store) }
+    }
+
+    fn save(
+        &mut self,
+        password: &str,
+        mnemonic: &Mnemonic,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let bytes = self._encrypt(password, mnemonic)?;
+        match self.store {
+            Some(ref mut store) => {
+                store.write(&bytes)?;
+                return Ok(());
+            }
+            None => {
+                return Err("No store provided".into());
+            }
+        };
+    }
+
+    fn load(&mut self, password: &str) -> Result<String, Box<dyn std::error::Error>> {
+        let bytes = match self.store {
+            Some(ref store) => store.read()?,
+            None => {
+                return Err("No store provided".into());
+            }
+        };
+        let mnemonic = self._decrypt(password, &bytes)?;
+        Ok(mnemonic.join(" ").to_string())
     }
 }
 
@@ -168,51 +156,51 @@ mod tests {
 
     #[test]
     fn test_save_load() {
-        let mut store = StoreMemory::default();
-        let mut mnemonicstore = Box::new(KeyVault::<StoreMemory>::default());
+        let store = StoreMemory::default();
+        let mut mnemonicstore = KeyVault::new(store);
         let mnemonic: Mnemonic = vec!["slite".to_string(), "test".to_string(), "rust".to_string()];
         mnemonicstore
-            .save("password", &mnemonic, Some(&mut store))
+            .save("password", &mnemonic)
             .expect("some thing happend");
 
-        let loaded = mnemonicstore.load("password", Some(&store)).unwrap();
+        let loaded = mnemonicstore.load("password").unwrap();
         println!("loaded string is {:?}", &loaded);
         assert_eq!(loaded, mnemonic.join(" ").to_string());
     }
 
     #[test]
     fn test_wrong_password_fails() {
-        let mut store = StoreMemory::default();
-        let mut mnemonicstore = Box::new(KeyVault::<StoreMemory>::default());
+        let store = StoreMemory::default();
+        let mut mnemonicstore = KeyVault::new(store);
         let mnemonic: Mnemonic = vec!["slite".to_string(), "test".to_string(), "rust".to_string()];
         mnemonicstore
-            .save("password", &mnemonic, Some(&mut store))
+            .save("password", &mnemonic)
             .expect("error in save");
-        let loaded = mnemonicstore.load("wrong_password", Some(&store));
+        let loaded = mnemonicstore.load("wrong_password");
         assert!(loaded.is_err());
     }
 
     #[test]
     fn test_storefile_save_load() {
-        let mut store = StoreFile::default(None);
-        let mut mnemonicstore = Box::new(KeyVault::<StoreFile>::default());
+        let store = StoreFile::default(None);
+        let mut mnemonicstore = KeyVault::new(store);
         let mnemonic: Mnemonic = vec!["slite".to_string(), "test".to_string(), "rust".to_string()];
         mnemonicstore
-            .save("password", &mnemonic, Some(&mut store))
+            .save("password", &mnemonic)
             .expect("error in save");
-        let loaded = mnemonicstore.load("password", Some(&store)).unwrap();
+        let loaded = mnemonicstore.load("password").unwrap();
         assert_eq!(loaded, mnemonic.join(" ").to_string());
     }
 
     #[test]
     fn test_storefile_save_load_with_path() {
-        let mut store = StoreFile::default(Some("/tmp/keystore_test.ebin"));
-        let mut mnemonicstore = Box::new(KeyVault::<StoreFile>::default());
+        let store = StoreFile::default(Some("/tmp/keystore_test.ebin"));
+        let mut mnemonicstore = KeyVault::new(store);
         let mnemonic: Mnemonic = vec!["slite".to_string(), "test".to_string(), "rust".to_string()];
         mnemonicstore
-            .save("password", &mnemonic, Some(&mut store))
+            .save("password", &mnemonic)
             .expect("error in save");
-        let loaded = mnemonicstore.load("password", Some(&store)).unwrap();
+        let loaded = mnemonicstore.load("password").unwrap();
         assert_eq!(loaded, mnemonic.join(" ").to_string());
     }
 }
