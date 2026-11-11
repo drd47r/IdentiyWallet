@@ -10,7 +10,9 @@ dependencies = [
  "bip39",
  "chacha20poly1305",
  "rand 0.10.3",
+ "serde_json",
  "ssi",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
