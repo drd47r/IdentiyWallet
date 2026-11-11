@@ -132,7 +132,7 @@ impl<S: Store> KeyVault<S> {
         };
     }
 
-    pub fn load(&mut self, password: &str) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn load(&mut self, password: &str) -> Result<Mnemonic, Box<dyn std::error::Error>> {
         let bytes = match self.store {
             Some(ref store) => store.read()?,
             None => {
@@ -140,7 +140,7 @@ impl<S: Store> KeyVault<S> {
             }
         };
         let mnemonic = self._decrypt(password, &bytes)?;
-        Ok(mnemonic.to_string())
+        Ok(mnemonic)
     }
 }
 
@@ -186,7 +186,7 @@ mod tests {
             .save("password", &mnemonic.as_ref().unwrap())
             .expect("error in save");
         let loaded = mnemonicstore.load("password").unwrap();
-        assert_eq!(loaded, mnemonic.unwrap().to_string());
+        assert_eq!(loaded.to_string(), mnemonic.unwrap().to_string());
     }
 
     #[test]
@@ -198,6 +198,6 @@ mod tests {
             .save("password", &mnemonic.as_ref().unwrap())
             .expect("error in save");
         let loaded = mnemonicstore.load("password").unwrap();
-        assert_eq!(loaded, mnemonic.unwrap().to_string());
+        assert_eq!(loaded.to_string(), mnemonic.unwrap().to_string());
     }
 }
