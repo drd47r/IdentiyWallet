@@ -1,8 +1,9 @@
 use crate::keystore::{KeyVault, Store};
-use bip32::{ChildNumber, DerivationPath, XPrv, XPub};
+use bip32::{DerivationPath, XPrv};
 use bip39::{Language, Mnemonic, WordCount};
 use rand::RngExt;
-use ssi::status::StatusMapEntrySet;
+use ssi::dids::AnyDidMethod;
+use ssi::prelude::*;
 use std::str::FromStr;
 
 /// DID identity card shown to the agent.
@@ -14,6 +15,18 @@ pub struct DidCard {
     pub did: ssi::dids::DIDBuf,
     pub document: ssi::dids::Document,
     pub label: Option<String>,
+}
+
+impl DidCard {
+    pub async fn new(did: ssi::dids::DIDBuf) -> Self {
+        let resolver = AnyDidMethod::default();
+        let did_doc = resolver.resolve(&did).await.unwrap().document;
+        Self {
+            did,
+            document: did_doc.into_document(),
+            label: None,
+        }
+    }
 }
 
 /// Local-only patches to a [DidCard]. Does not rotate the DID.
@@ -102,24 +115,23 @@ fn default_password_generate() -> Result<String, WalletError> {
     Ok(pwd)
 }
 
+pub fn metamask_account(seed: &[u8], index: u32) -> Result<XPrv, WalletError> {
+    let path: DerivationPath = format!("m/44'/60'/0'/0/{index}")
+        .parse()
+        .map_err(|_| WalletError::Bip32)?;
+    XPrv::derive_from_path(seed, &path).map_err(|_| WalletError::Bip32)
+}
+
+#[allow(async_fn_in_trait)]
 pub trait WalletTrait<S: Store>: Sized {
     fn new(store: S, password: Option<&str>) -> Result<Self, WalletError>;
     fn init(&mut self, mnemonic_str: &str, password: Option<&str>) -> Result<(), WalletError>;
-    fn unlock(&mut self, password: &str, index: u32) -> Result<(), WalletError>;
+    async fn unlock(&mut self, password: &str, index: u32) -> Result<(), WalletError>;
     fn lock(&mut self);
     fn card(&self) -> Result<&DidCard, WalletError>;
     fn public_jwk(&self) -> Result<ssi::JWK, WalletError>;
     fn update_card(&mut self, patch: DidCardUpdate) -> Result<&DidCard, WalletError>;
     fn handle(&self, request: DidRequest) -> Result<DidResponse, WalletError>;
-    fn metamask_account(seed: &[u8], index: u32) -> Result<XPrv, WalletError> {
-        let path: DerivationPath = format!("m/44'/60'/0'/0/{index}")
-            .parse()
-            .map_err(|_| WalletError::Bip32)?;
-        XPrv::derive_from_path(seed, &path).map_err(|_| WalletError::Bip32)
-    }
-
-//let account0 = metamask_account(&seed, 0)?; // same as MetaMask account 1
-//let account1 = metamask_account(&seed, 1)?; // "Create account"
 }
 
 impl<S: Store> WalletTrait<S> for Wallet<S> {
@@ -154,30 +166,25 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
         Ok(())
     }
 
-    fn unlock(&mut self, _password: &str, index: u32) -> Result<(), WalletError> {
+    async fn unlock(&mut self, password: &str, index: u32) -> Result<(), WalletError> {
         // load mnemonic from vault, then:
-        // mnemonic.to_seed("") -> BIP32 master XPrv at m (secp256k1)
-        // -> ssi::JWK -> DIDJWK::generate(&jwk.to_public())
-        //todo!("load mnemonic, BIP32 master, did:jwk")
+        // mnemonic.to_seed("") -> BIP32 account at m/44'/60'/0'/0/{index}
+        // -> ssi::JWK -> DIDJWK::generate(&jwk)
         let mnemonic = self
             .vault
-            .load(_password)
+            .load(password)
             .map_err(|_| WalletError::Decrypt)?;
         let seed = mnemonic.to_seed("");
-        let master_xprv = XPrv::new(&seed);
-        println!("{:#?}", &master_xprv.as_ref().unwrap().attrs());
-        let master_xprv = master_xprv.unwrap().derive_child(ChildNumber::from(0));
-        println!("{:#?}", &master_xprv.as_ref().unwrap().attrs());
-        let master_xprv = master_xprv.unwrap().derive_child(ChildNumber::from(1));
-        println!("{:#?}", &master_xprv.as_ref().unwrap().attrs());
-        
-
-        //let path: DerivationPath = "m/44'/0'/0'".parse().map_err(|_| WalletError::Bip32)?;
-        let path: DerivationPath = "m/0".parse().map_err(|_| WalletError::Bip32)?;
-        let xprv = XPrv::derive_from_path(&seed, &path).map_err(|_| WalletError::Bip32)?;
-        println!("{:#?}", &xprv);
-        // let private_key = self.metamask_account(&seed, index)?;
-        // println!("{:#?}", &private_key);
+        let private_key = metamask_account(&seed, index)?;
+        // XPrv::to_bytes() is a raw 32-byte scalar. ssi's k256 (0.13) is a
+        // different crate from bip32's k256 (0.14), so parse the bytes with
+        // ssi's type. secp256k1_parse_private expects SEC1 DER, not raw bytes.
+        let secret = ssi::crypto::k256::SecretKey::from_slice(&private_key.to_bytes())
+            .map_err(|_| WalletError::Ssi)?;
+        let jwk = ssi::JWK::from(ssi::jwk::Params::EC(ssi::jwk::ECParams::from(&secret)));
+        let did = ssi::dids::DIDJWK::generate(&jwk);
+        let card = DidCard::new(did).await;
+        self.unlocked = Some(Unlocked { mnemonic, jwk, card });
         Ok(())
     }
 
@@ -220,12 +227,12 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_wallet_master_key() {
+    #[tokio::test]
+    async fn test_wallet_master_key() {
         let mut wallet = Wallet::new(StoreFile::default(None), Some("password")).unwrap();
         let mnemonic = Mnemonic::generate_in(Language::English, WordCount::Words12).unwrap();
         let result = wallet.init(&mnemonic.to_string(), Some("password"));
         assert!(result.is_ok());
-        assert!(wallet.unlock("password", 0).is_ok());
+        assert!(wallet.unlock("password", 0).await.is_ok());
     }
 }
