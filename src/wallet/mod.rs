@@ -2,59 +2,10 @@ use crate::keystore::{KeyVault, Store};
 use bip32::{DerivationPath, XPrv};
 use bip39::{Language, Mnemonic, WordCount};
 use rand::RngExt;
-use ssi::dids::AnyDidMethod;
-use ssi::prelude::*;
 use std::str::FromStr;
 
-/// DID identity card shown to the agent.
-///
-/// For `did:jwk` / `did:key`, `did` is derived from the key. `label` and later
-/// document overlay fields are local only.
-#[derive(Debug, Clone)]
-pub struct DidCard {
-    pub did: ssi::dids::DIDBuf,
-    pub document: ssi::dids::Document,
-    pub label: Option<String>,
-}
-
-impl DidCard {
-    pub async fn new(did: ssi::dids::DIDBuf) -> Self {
-        let resolver = AnyDidMethod::default();
-        let did_doc = resolver.resolve(&did).await.unwrap().document;
-        Self {
-            did,
-            document: did_doc.into_document(),
-            label: None,
-        }
-    }
-}
-
-/// Local-only patches to a [DidCard]. Does not rotate the DID.
-#[derive(Debug, Clone, Default)]
-pub struct DidCardUpdate {
-    pub label: Option<String>,
-    pub also_known_as: Option<Vec<String>>,
-    pub services: Option<Vec<ssi::dids::document::Service>>,
-}
-
-/// Requests a system / agent can send the wallet.
-#[derive(Debug, Clone)]
-pub enum DidRequest {
-    ResolveDid,
-    Authenticate {
-        challenge: String,
-        domain: Option<String>,
-    },
-    SignClaims {
-        claims: serde_json::Value,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub enum DidResponse {
-    Document(ssi::dids::Document),
-    Jws(ssi::claims::JwsBuf),
-}
+mod didcard;
+use didcard::*;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletError {
@@ -73,7 +24,6 @@ pub enum WalletError {
     #[error("{0}")]
     Other(String),
 }
-
 /// Unlocked session material. Fill in on `unlock` / after `new`+derive:
 /// 1. `mnemonic.to_seed("")`
 /// 2. BIP32 master `XPrv` at path `m` (secp256k1)
@@ -184,7 +134,11 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
         let jwk = ssi::JWK::from(ssi::jwk::Params::EC(ssi::jwk::ECParams::from(&secret)));
         let did = ssi::dids::DIDJWK::generate(&jwk);
         let card = DidCard::new(did).await;
-        self.unlocked = Some(Unlocked { mnemonic, jwk, card });
+        self.unlocked = Some(Unlocked {
+            mnemonic,
+            jwk,
+            card,
+        });
         Ok(())
     }
 
@@ -193,11 +147,17 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
     }
 
     fn card(&self) -> Result<&DidCard, WalletError> {
-        todo!("return unlocked card")
+        self.unlocked
+            .as_ref()
+            .map(|u| &u.card)
+            .ok_or(WalletError::Locked)
     }
 
     fn public_jwk(&self) -> Result<ssi::JWK, WalletError> {
-        todo!("JWK::to_public, never private")
+        self.unlocked
+            .as_ref()
+            .map(|u| u.jwk.clone())
+            .ok_or(WalletError::Locked)
     }
 
     fn update_card(&mut self, _patch: DidCardUpdate) -> Result<&DidCard, WalletError> {
@@ -205,7 +165,14 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
     }
 
     fn handle(&self, _request: DidRequest) -> Result<DidResponse, WalletError> {
-        todo!("ResolveDid / Authenticate / SignClaims")
+        self.unlocked.as_ref().ok_or(WalletError::Locked)?;
+        //todo!("ResolveDid / Authenticate / SignClaims")
+        let unlocked = self.unlocked.as_ref().unwrap();
+        match _request {
+            DidRequest::ResolveDid => Ok(DidResponse::Document(unlocked.card.document.clone())),
+            DidRequest::Authenticate { .. } => todo!(),
+            DidRequest::SignClaims { .. } => todo!(),
+        }
     }
 }
 
