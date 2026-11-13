@@ -183,9 +183,10 @@ mod tests {
 
     #[test]
     fn test_wallet_new() {
-        let wallet = Wallet::new(StoreFile::default(None), Some("password"));
+        let wallet = Wallet::new(StoreFile::default(None), None);
         assert!(wallet.is_ok());
     }
+
     #[test]
     fn test_wallet_init() {
         let mut wallet = Wallet::new(StoreFile::default(None), Some("password")).unwrap();
@@ -201,5 +202,18 @@ mod tests {
         let result = wallet.init(&mnemonic.to_string(), Some("password"));
         assert!(result.is_ok());
         assert!(wallet.unlock("password", 0).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_wallet_handle() {
+        let mut wallet = Wallet::new(StoreFile::default(None), Some("password")).unwrap();
+        let mnemonic = Mnemonic::generate_in(Language::English, WordCount::Words12).unwrap();
+        let result = wallet.init(&mnemonic.to_string(), Some("password"));
+        assert!(result.is_ok());
+        assert!(wallet.unlock("password", 0).await.is_ok());
+        let request = DidRequest::ResolveDid;
+        let response = wallet.handle(request);
+        println!("respone {:?}", response.as_ref().unwrap());
+        assert!(response.is_ok());
     }
 }
