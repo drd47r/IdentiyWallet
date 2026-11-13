@@ -13,6 +13,7 @@ dependencies = [
  "rand 0.10.3",
  "serde_json",
  "ssi",
+ "ssi-jws",
  "thiserror 2.0.21",
  "tokio",
 ]

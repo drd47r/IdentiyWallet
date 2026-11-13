@@ -2,6 +2,8 @@ use crate::keystore::{KeyVault, Store};
 use bip32::{DerivationPath, XPrv};
 use bip39::{Language, Mnemonic, WordCount};
 use rand::RngExt;
+use serde_json::json;
+use ssi_jws::Jws;
 use std::str::FromStr;
 
 mod didcard;
@@ -170,7 +172,15 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
         let unlocked = self.unlocked.as_ref().unwrap();
         match _request {
             DidRequest::ResolveDid => Ok(DidResponse::Document(unlocked.card.document.clone())),
-            DidRequest::Authenticate { .. } => todo!(),
+            DidRequest::Authenticate { challenge, domain } => {
+                let payload = json!({
+                    "did": unlocked.card.did.as_str(),
+                    "challenge": challenge,
+                    "domain": domain
+                });
+                //Ok(DidResponse::Jws(Jws::sign(payload, unlocked.jwk.clone())))
+                todo!()
+            }
             DidRequest::SignClaims { .. } => todo!(),
         }
     }
