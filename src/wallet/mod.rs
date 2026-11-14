@@ -3,7 +3,7 @@ use bip32::{DerivationPath, XPrv};
 use bip39::{Language, Mnemonic, WordCount};
 use rand::RngExt;
 use serde_json::json;
-use ssi_jws::Jws;
+use ssi_jws::JwsPayload;
 use std::str::FromStr;
 
 mod didcard;
@@ -83,7 +83,7 @@ pub trait WalletTrait<S: Store>: Sized {
     fn card(&self) -> Result<&DidCard, WalletError>;
     fn public_jwk(&self) -> Result<ssi::JWK, WalletError>;
     fn update_card(&mut self, patch: DidCardUpdate) -> Result<&DidCard, WalletError>;
-    fn handle(&self, request: DidRequest) -> Result<DidResponse, WalletError>;
+    async fn handle(&self, request: DidRequest) -> Result<DidResponse, WalletError>;
 }
 
 impl<S: Store> WalletTrait<S> for Wallet<S> {
@@ -166,7 +166,7 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
         todo!("local overlay only")
     }
 
-    fn handle(&self, _request: DidRequest) -> Result<DidResponse, WalletError> {
+    async fn handle(&self, _request: DidRequest) -> Result<DidResponse, WalletError> {
         self.unlocked.as_ref().ok_or(WalletError::Locked)?;
         //todo!("ResolveDid / Authenticate / SignClaims")
         let unlocked = self.unlocked.as_ref().unwrap();
@@ -178,8 +178,8 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
                     "challenge": challenge,
                     "domain": domain
                 });
-                //Ok(DidResponse::Jws(Jws::sign(payload, unlocked.jwk.clone())))
-                todo!()
+                let signbuff = payload.to_string().sign(&unlocked.jwk).await.unwrap();
+                Ok(DidResponse::Jws(signbuff))
             }
             DidRequest::SignClaims { .. } => todo!(),
         }
@@ -221,9 +221,16 @@ mod tests {
         let result = wallet.init(&mnemonic.to_string(), Some("password"));
         assert!(result.is_ok());
         assert!(wallet.unlock("password", 0).await.is_ok());
+
         let request = DidRequest::ResolveDid;
-        let response = wallet.handle(request);
-        println!("respone {:?}", response.as_ref().unwrap());
-        assert!(response.is_ok());
+        let response = wallet.handle(request).await.unwrap();
+        println!("ResolveDid respone {:?}", response);
+        let request = DidRequest::Authenticate {
+            challenge: "this is challenge".to_string(),
+            domain: Some("example.com".to_string()),
+        };
+
+        let response = wallet.handle(request).await.unwrap();
+        println!("Auth respone {:?}", response);
     }
 }
