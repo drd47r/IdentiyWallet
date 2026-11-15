@@ -134,7 +134,7 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
         let secret = ssi::crypto::k256::SecretKey::from_slice(&private_key.to_bytes())
             .map_err(|_| WalletError::Ssi)?;
         let jwk = ssi::JWK::from(ssi::jwk::Params::EC(ssi::jwk::ECParams::from(&secret)));
-        let did = ssi::dids::DIDJWK::generate(&jwk);
+        let did = ssi::dids::DIDJWK::generate(&jwk.to_public());
         let card = DidCard::new(did).await;
         self.unlocked = Some(Unlocked {
             mnemonic,
@@ -158,7 +158,7 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
     fn public_jwk(&self) -> Result<ssi::JWK, WalletError> {
         self.unlocked
             .as_ref()
-            .map(|u| u.jwk.clone())
+            .map(|u| u.jwk.to_public())
             .ok_or(WalletError::Locked)
     }
 
