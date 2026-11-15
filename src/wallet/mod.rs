@@ -181,7 +181,10 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
                 let signbuff = payload.to_string().sign(&unlocked.jwk).await.unwrap();
                 Ok(DidResponse::Jws(signbuff))
             }
-            DidRequest::SignClaims { .. } => todo!(),
+            DidRequest::SignClaims { claims } => {
+                let signbuff = claims.to_string().sign(&unlocked.jwk).await.unwrap();
+                Ok(DidResponse::Jws(signbuff))
+            }
         }
     }
 }
@@ -250,5 +253,20 @@ mod tests {
         // test jws verification
         let jws = ssi_jws::Jws::from_str_const(jws_buff.as_str()).unwrap();
         assert!(jws.verify(&jwk).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_wallet_sign_claims_handle() {
+        let mut wallet = Wallet::new(StoreFile::default(None), Some("password")).unwrap();
+        let mnemonic = Mnemonic::generate_in(Language::English, WordCount::Words12).unwrap();
+        let result = wallet.init(&mnemonic.to_string(), Some("password"));
+        assert!(result.is_ok());
+        assert!(wallet.unlock("password", 0).await.is_ok());
+        // test sign claims request
+        let request = DidRequest::SignClaims {
+            claims: serde_json::json!({}),
+        };
+        let response = wallet.handle(request).await.unwrap();
+        println!("SignClaims respone \n {:?}", &response);
     }
 }
