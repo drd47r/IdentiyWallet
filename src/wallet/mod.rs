@@ -63,7 +63,7 @@ fn default_password_generate() -> Result<String, WalletError> {
             .collect()
     }
     let pwd = generate_password(16);
-    println!("Generated password: {}", pwd);
+    println!("Generated password: \n {}", pwd);
     Ok(pwd)
 }
 
@@ -215,22 +215,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_wallet_handle() {
+    async fn test_wallet_resolve_did_authenticate_handle() {
+        //create a wallet and unlock it
         let mut wallet = Wallet::new(StoreFile::default(None), Some("password")).unwrap();
         let mnemonic = Mnemonic::generate_in(Language::English, WordCount::Words12).unwrap();
         let result = wallet.init(&mnemonic.to_string(), Some("password"));
         assert!(result.is_ok());
         assert!(wallet.unlock("password", 0).await.is_ok());
 
+        // test resolve did request
         let request = DidRequest::ResolveDid;
         let response = wallet.handle(request).await.unwrap();
-        println!("ResolveDid respone {:?}", response);
+        println!(
+            "ResolveDid respone \n {:?}",
+            if let DidResponse::Document(doc) = response {
+                println!("{:#?}", doc)
+            }
+        );
+        // test authenticate request
         let request = DidRequest::Authenticate {
             challenge: "this is challenge".to_string(),
             domain: Some("example.com".to_string()),
         };
 
         let response = wallet.handle(request).await.unwrap();
-        println!("Auth respone {:?}", response);
+        println!("Auth respone \n {:?}", &response);
+
+        // test public jwk
+        let jwk = wallet.public_jwk().unwrap();
+        let DidResponse::Jws(jws_buff) = response else {
+            panic!("expected Jws response")
+        };
+
+        // test jws verification
+        let jws = ssi_jws::Jws::from_str_const(jws_buff.as_str()).unwrap();
+        assert!(jws.verify(&jwk).await.is_ok());
     }
 }
