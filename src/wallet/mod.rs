@@ -217,8 +217,27 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
             .ok_or(WalletError::Locked)
     }
 
-    fn update_card(&mut self, _patch: DidCardUpdate) -> Result<&DidCard, WalletError> {
-        todo!("local overlay only")
+    fn update_card(&mut self, patch: DidCardUpdate) -> Result<&DidCard, WalletError> {
+        let unlocked = self.unlocked.as_mut().ok_or(WalletError::Locked)?;
+
+        // Local overlay only: never touch unlocked.card.did / document.id.
+        if let Some(label) = patch.label {
+            unlocked.card.label = Some(label);
+        }
+        if let Some(also_known_as) = patch.also_known_as {
+            unlocked.card.document.also_known_as = also_known_as
+                .into_iter()
+                .map(|s| {
+                    iref::IriBuf::new(s)
+                        .map_err(|e| WalletError::Other(format!("invalid alsoKnownAs IRI: {e}")))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+        }
+        if let Some(services) = patch.services {
+            unlocked.card.document.service = services;
+        }
+
+        Ok(&unlocked.card)
     }
 
     async fn handle(&self, _request: DidRequest) -> Result<DidResponse, WalletError> {
@@ -332,6 +351,33 @@ mod tests {
         };
         let response = wallet.handle(request).await.unwrap();
         println!("SignClaims respone \n {:?}", &response);
+    }
+
+    #[tokio::test]
+    async fn test_wallet_update_card() {
+        let mut wallet = Wallet::new(StoreFile::default(None), Some("password")).unwrap();
+        let mnemonic = Mnemonic::generate_in(Language::English, WordCount::Words12).unwrap();
+        wallet
+            .init(&mnemonic.to_string(), Some("password"))
+            .unwrap();
+        wallet.unlock("password", 0, None).await.unwrap();
+
+        let did_before = wallet.card().unwrap().did.clone();
+        let card = wallet
+            .update_card(DidCardUpdate {
+                label: Some("alice".into()),
+                also_known_as: Some(vec!["https://example.com/alice".into()]),
+                services: None,
+            })
+            .unwrap();
+
+        assert_eq!(card.label.as_deref(), Some("alice"));
+        assert_eq!(card.did, did_before);
+        assert_eq!(card.document.id, did_before);
+        assert_eq!(
+            card.document.also_known_as[0].as_str(),
+            "https://example.com/alice"
+        );
     }
 
     #[tokio::test]

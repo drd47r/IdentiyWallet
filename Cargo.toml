@@ -15,6 +15,7 @@ ssi-dids = "0.5.0"
 ssi-dids-core = "0.3.1"
 ssi-jwk = "0.4.0"
 ssi-jws = "0.5.0"
+iref = "3"
 thiserror = "2"
 
 [dev-dependencies]
