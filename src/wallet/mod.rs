@@ -4,7 +4,7 @@ use bip39::{Language, Mnemonic, WordCount};
 use rand::RngExt;
 use serde_json::json;
 use ssi_jws::JwsPayload;
-use std::{any::Any, str::FromStr};
+use std::str::FromStr;
 
 mod didcard;
 use didcard::*;
@@ -46,6 +46,13 @@ pub struct Wallet<S: Store> {
     unlocked: Option<Unlocked>,
 }
 
+pub enum DIDOptions {
+    Web(Option<String>),
+    Eth(Option<String>),
+    Jwk,
+    Key,
+}
+
 fn default_password_generate() -> Result<String, WalletError> {
     use rand::rng;
 
@@ -78,11 +85,12 @@ pub fn metamask_account(seed: &[u8], index: u32) -> Result<XPrv, WalletError> {
 pub trait WalletTrait<S: Store>: Sized {
     fn new(store: S, password: Option<&str>) -> Result<Self, WalletError>;
     fn init(&mut self, mnemonic_str: &str, password: Option<&str>) -> Result<(), WalletError>;
-    async fn unlock<M: ssi_dids::DIDMethod>(
+    async fn unlock(
         &mut self,
         password: &str,
         index: u32,
-        did_method: Option<M>,
+        opt: Option<DIDOptions>,
+        //did_method: Option<M>,
     ) -> Result<(), WalletError>;
     fn lock(&mut self);
     fn card(&self) -> Result<&DidCard, WalletError>;
@@ -123,11 +131,12 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
         Ok(())
     }
 
-    async fn unlock<M: ssi_dids::DIDMethod>(
+    async fn unlock(
         &mut self,
         password: &str,
         index: u32,
-        _did_method: Option<M>,
+        //_did_method: Option<M>,
+        opt: Option<DIDOptions>,
     ) -> Result<(), WalletError> {
         // load mnemonic from vault, then:
         // mnemonic.to_seed("") -> BIP32 account at m/44'/60'/0'/0/{index}
@@ -146,28 +155,34 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
         let jwk = ssi::JWK::from(ssi::jwk::Params::EC(ssi::jwk::ECParams::from(&secret)));
 
         //let method_name = <M as ssi_dids::DIDMethod>::DID_METHOD_NAME;
-        let method = _did_method
-            .is_some()
-            .then(|| <M as ssi_dids::DIDMethod>::DID_METHOD_NAME);
+        // let method = _did_method
+        //     .is_some()
+        //     .then(|| <M as ssi_dids::DIDMethod>::DID_METHOD_NAME);
 
-        let method_str = method.unwrap_or("key");
-        match method_str {
-            "web" => {
-                let did = ssi_dids::DIDBuf::new(
-                    "did:web:://example.com:users:alice"
-                        .to_string()
-                        .into_bytes(),
-                )
-                .unwrap();
+        //let method_str = method.unwrap_or("key");
+        let opt = opt.unwrap_or(DIDOptions::Key);
+        match opt {
+            DIDOptions::Web(serde_json) => {
+                // let did = ssi_dids::DIDBuf::new(
+                //     "did:web:://example.com:users:alice"
+                //         .to_string()
+                //         .into_bytes(),
+                // )
+                // .unwrap();
+                //let did = ssi_dids::DID::new("did:web:w3c-ccg.github.io:user:alice").unwrap();
                 //let card = ssi_dids::DIDURLBuf::new(format!("{did}#key-1").into_bytes()).unwrap();
-                let card = DidCard::new(did).await;
+                //let card = DidCard::new(did).await;
+                let did_string =
+                    serde_json.unwrap_or("did:web:w3c-ccg.github.io:user:alice".to_owned());
+                let didbuf = ssi_dids::DIDBuf::from_string(did_string).unwrap();
+                let card = DidCard::new(didbuf).await;
                 self.unlocked = Some(Unlocked {
                     mnemonic,
                     jwk,
                     card,
                 });
             }
-            "key" | "jwk" | "" => {
+            DIDOptions::Jwk | DIDOptions::Key => {
                 let did = ssi::dids::DIDJWK::generate(&jwk.to_public());
                 let card = DidCard::new(did).await;
                 self.unlocked = Some(Unlocked {
@@ -262,12 +277,8 @@ mod tests {
         let mnemonic = Mnemonic::generate_in(Language::English, WordCount::Words12).unwrap();
         let result = wallet.init(&mnemonic.to_string(), Some("password"));
         assert!(result.is_ok());
-        assert!(
-            wallet
-                .unlock::<ssi_dids::DIDKey>("password", 0, None)
-                .await
-                .is_ok()
-        );
+        let opt = Some(DIDOptions::Key);
+        assert!(wallet.unlock("password", 0, opt).await.is_ok());
     }
 
     #[tokio::test]
@@ -277,12 +288,7 @@ mod tests {
         let mnemonic = Mnemonic::generate_in(Language::English, WordCount::Words12).unwrap();
         let result = wallet.init(&mnemonic.to_string(), Some("password"));
         assert!(result.is_ok());
-        assert!(
-            wallet
-                .unlock::<ssi_dids::DIDKey>("password", 0, None)
-                .await
-                .is_ok()
-        );
+        assert!(wallet.unlock("password", 0, None).await.is_ok());
 
         // test resolve did request
         let request = DidRequest::ResolveDid;
@@ -319,16 +325,25 @@ mod tests {
         let mnemonic = Mnemonic::generate_in(Language::English, WordCount::Words12).unwrap();
         let result = wallet.init(&mnemonic.to_string(), Some("password"));
         assert!(result.is_ok());
-        assert!(
-            wallet
-                .unlock::<ssi_dids::DIDKey>("password", 0, None)
-                .await
-                .is_ok()
-        );
+        assert!(wallet.unlock("password", 0, None).await.is_ok());
         // test sign claims request
         let request = DidRequest::SignClaims {
             claims: serde_json::json!({}),
         };
+        let response = wallet.handle(request).await.unwrap();
+        println!("SignClaims respone \n {:?}", &response);
+    }
+
+    #[tokio::test]
+    async fn test_wallet_request_card_handle() {
+        let mut wallet = Wallet::new(StoreFile::default(None), Some("password")).unwrap();
+        let mnemonic = Mnemonic::generate_in(Language::English, WordCount::Words12).unwrap();
+        let result = wallet.init(&mnemonic.to_string(), Some("password"));
+        assert!(result.is_ok());
+        let opt = DIDOptions::Web(Some("did:web:w3c-ccg.github.io:user:alice".to_owned()));
+        assert!(wallet.unlock("password", 0, Some(opt)).await.is_ok());
+        // test sign claims request
+        let request = DidRequest::ResolveDid {};
         let response = wallet.handle(request).await.unwrap();
         println!("SignClaims respone \n {:?}", &response);
     }
