@@ -175,7 +175,7 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
                 let did_string =
                     serde_json.unwrap_or("did:web:w3c-ccg.github.io:user:alice".to_owned());
                 let didbuf = ssi_dids::DIDBuf::from_string(did_string).unwrap();
-                let card = DidCard::new(didbuf).await;
+                let card = DidCard::new(didbuf, Some(jwk.clone())).await;
                 self.unlocked = Some(Unlocked {
                     mnemonic,
                     jwk,
@@ -184,7 +184,7 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
             }
             DIDOptions::Jwk | DIDOptions::Key => {
                 let did = ssi::dids::DIDJWK::generate(&jwk.to_public());
-                let card = DidCard::new(did).await;
+                let card = DidCard::new(did, None).await;
                 self.unlocked = Some(Unlocked {
                     mnemonic,
                     jwk,
@@ -342,9 +342,11 @@ mod tests {
         assert!(result.is_ok());
         let opt = DIDOptions::Web(Some("did:web:w3c-ccg.github.io:user:alice".to_owned()));
         assert!(wallet.unlock("password", 0, Some(opt)).await.is_ok());
+        let card = wallet.card().unwrap();
+        println!("Did Card document \n{:#?}", &card.document);
         // test sign claims request
         let request = DidRequest::ResolveDid {};
         let response = wallet.handle(request).await.unwrap();
-        println!("SignClaims respone \n {:?}", &response);
+        println!("SignClaims respone \n{:?}", &response);
     }
 }

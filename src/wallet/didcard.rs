@@ -12,13 +12,39 @@ pub struct DidCard {
 }
 
 impl DidCard {
-    pub async fn new(did: ssi::dids::DIDBuf) -> Self {
+    pub async fn new(did: ssi::dids::DIDBuf, jwk: Option<ssi_jwk::JWK>) -> Self {
         let resolver = AnyDidMethod::default();
-        let did_doc = resolver.resolve(&did).await.unwrap().document;
-        Self {
-            did,
-            document: did_doc.into_document(),
-            label: None,
+        let didm = did.method_name();
+        println!("DIDCard new did {:#?}, {:?}", &did, &didm);
+        match didm {
+            "web" => {
+                let mut doc = ssi_dids::Document::new(did.clone());
+                let key_id = ssi_dids::DIDURLBuf::new(format!("{did}#key-1").into_bytes()).unwrap();
+                let vm = ssi_dids_core::document::DIDVerificationMethod {
+                    id: key_id,
+                    type_: "JsonWebKey2020".to_string(),
+                    controller: did.clone(),
+                    properties: serde_json::from_value(serde_json::json!({
+                        "publicKeyJwk": jwk.map(|jwk| jwk.to_public())
+                    }))
+                    .unwrap(),
+                };
+                doc.verification_method.push(vm);
+
+                return Self {
+                    did,
+                    document: doc,
+                    label: None,
+                };
+            }
+            _ => {
+                let did_doc = resolver.resolve(&did).await.unwrap().document;
+                return Self {
+                    did,
+                    document: did_doc.into_document(),
+                    label: None,
+                };
+            }
         }
     }
 }
