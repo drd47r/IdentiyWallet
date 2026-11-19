@@ -46,10 +46,17 @@ pub struct Wallet<S: Store> {
     unlocked: Option<Unlocked>,
 }
 
+/// Which DID method to bind on unlock.
+///
+/// Primary supported methods: [`DIDOptions::Key`] (`did:key`) and
+/// [`DIDOptions::Web`] (`did:web`). `Jwk` / `Eth` are optional extras.
+#[derive(Debug, Clone)]
 pub enum DIDOptions {
+    /// `did:web:...` — pass the full DID string (document is local overlay + key).
     Web(Option<String>),
     Eth(Option<String>),
     Jwk,
+    /// `did:key:...` derived from the public key (default).
     Key,
 }
 
@@ -90,7 +97,6 @@ pub trait WalletTrait<S: Store>: Sized {
         password: &str,
         index: u32,
         opt: Option<DIDOptions>,
-        //did_method: Option<M>,
     ) -> Result<(), WalletError>;
     fn lock(&mut self);
     fn card(&self) -> Result<&DidCard, WalletError>;
@@ -135,7 +141,6 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
         &mut self,
         password: &str,
         index: u32,
-        //_did_method: Option<M>,
         opt: Option<DIDOptions>,
     ) -> Result<(), WalletError> {
         // load mnemonic from vault, then:
@@ -154,48 +159,40 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
             .map_err(|_| WalletError::Ssi)?;
         let jwk = ssi::JWK::from(ssi::jwk::Params::EC(ssi::jwk::ECParams::from(&secret)));
 
-        //let method_name = <M as ssi_dids::DIDMethod>::DID_METHOD_NAME;
-        // let method = _did_method
-        //     .is_some()
-        //     .then(|| <M as ssi_dids::DIDMethod>::DID_METHOD_NAME);
-
-        //let method_str = method.unwrap_or("key");
         let opt = opt.unwrap_or(DIDOptions::Key);
-        match opt {
-            DIDOptions::Web(serde_json) => {
-                // let did = ssi_dids::DIDBuf::new(
-                //     "did:web:://example.com:users:alice"
-                //         .to_string()
-                //         .into_bytes(),
-                // )
-                // .unwrap();
-                //let did = ssi_dids::DID::new("did:web:w3c-ccg.github.io:user:alice").unwrap();
-                //let card = ssi_dids::DIDURLBuf::new(format!("{did}#key-1").into_bytes()).unwrap();
-                //let card = DidCard::new(did).await;
-                let did_string =
-                    serde_json.unwrap_or("did:web:w3c-ccg.github.io:user:alice".to_owned());
-                let didbuf = ssi_dids::DIDBuf::from_string(did_string).unwrap();
-                let card = DidCard::new(didbuf, Some(jwk.clone())).await;
-                self.unlocked = Some(Unlocked {
-                    mnemonic,
-                    jwk,
-                    card,
-                });
+        let public = jwk.to_public();
+        let (did, attach_jwk) = match opt {
+            DIDOptions::Key => {
+                let did = ssi::dids::DIDKey::generate(&public)
+                    .map_err(|e| WalletError::Other(format!("did:key generate: {e}")))?;
+                (did, None)
             }
-            DIDOptions::Jwk | DIDOptions::Key => {
-                let did = ssi::dids::DIDJWK::generate(&jwk.to_public());
-                let card = DidCard::new(did, None).await;
-                self.unlocked = Some(Unlocked {
-                    mnemonic,
-                    jwk,
-                    card,
-                });
+            DIDOptions::Jwk => (ssi::dids::DIDJWK::generate(&public), None),
+            DIDOptions::Web(did_string) => {
+                let did_string = did_string.ok_or_else(|| {
+                    WalletError::Other("did:web requires a DID string (e.g. did:web:example.com)".into())
+                })?;
+                if !did_string.starts_with("did:web:") {
+                    return Err(WalletError::Other(format!(
+                        "expected did:web:..., got {did_string}"
+                    )));
+                }
+                let did = ssi_dids::DIDBuf::from_string(did_string)
+                    .map_err(|e| WalletError::Other(format!("invalid did:web: {e:?}")))?;
+                (did, Some(public))
             }
-            _ => {
-                return Err(WalletError::Other("unsupported did method".to_string()));
+            DIDOptions::Eth(_) => {
+                return Err(WalletError::Other(
+                    "did:ethr is not supported yet; use did:key or did:web".into(),
+                ));
             }
-        }
-        //let did = ssi::dids::DIDJWK::generate(&jwk.to_public());
+        };
+        let card = DidCard::new(did, attach_jwk).await;
+        self.unlocked = Some(Unlocked {
+            mnemonic,
+            jwk,
+            card,
+        });
         Ok(())
     }
 
@@ -291,13 +288,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_wallet_master_key() {
+    async fn test_wallet_unlock_did_key() {
         let mut wallet = Wallet::new(StoreFile::default(None), Some("password")).unwrap();
         let mnemonic = Mnemonic::generate_in(Language::English, WordCount::Words12).unwrap();
-        let result = wallet.init(&mnemonic.to_string(), Some("password"));
-        assert!(result.is_ok());
-        let opt = Some(DIDOptions::Key);
-        assert!(wallet.unlock("password", 0, opt).await.is_ok());
+        wallet
+            .init(&mnemonic.to_string(), Some("password"))
+            .unwrap();
+        wallet
+            .unlock("password", 0, Some(DIDOptions::Key))
+            .await
+            .unwrap();
+        let did = wallet.card().unwrap().did.as_str();
+        assert!(
+            did.starts_with("did:key:"),
+            "expected did:key, got {did}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wallet_unlock_did_web() {
+        let mut wallet = Wallet::new(StoreFile::default(None), Some("password")).unwrap();
+        let mnemonic = Mnemonic::generate_in(Language::English, WordCount::Words12).unwrap();
+        wallet
+            .init(&mnemonic.to_string(), Some("password"))
+            .unwrap();
+        let web = "did:web:example.com:user:alice".to_owned();
+        wallet
+            .unlock("password", 0, Some(DIDOptions::Web(Some(web.clone()))))
+            .await
+            .unwrap();
+        assert_eq!(wallet.card().unwrap().did.as_str(), web);
+        assert!(!wallet.card().unwrap().document.verification_method.is_empty());
     }
 
     #[tokio::test]

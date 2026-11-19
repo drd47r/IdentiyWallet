@@ -2,8 +2,11 @@ use ssi::dids::AnyDidMethod;
 use ssi::prelude::*;
 
 /// DID identity card shown to the agent.
-/// For `did:jwk` / `did:key`, `did` is derived from the key. `label` and later
-/// document overlay fields are local only.
+///
+/// For `did:key` / `did:jwk`, `did` is derived from the key and the document is
+/// resolved from the method. For `did:web`, the DID is supplied and the document
+/// is a local overlay that attaches the wallet public key. `label` and other
+/// patches remain local only.
 #[derive(Debug, Clone)]
 pub struct DidCard {
     pub did: ssi::dids::DIDBuf,
@@ -13,7 +16,6 @@ pub struct DidCard {
 
 impl DidCard {
     pub async fn new(did: ssi::dids::DIDBuf, jwk: Option<ssi_jwk::JWK>) -> Self {
-        let resolver = AnyDidMethod::default();
         let didm = did.method_name();
         println!("DIDCard new did {:#?}, {:?}", &did, &didm);
         match didm {
@@ -38,6 +40,7 @@ impl DidCard {
                 };
             }
             _ => {
+                let resolver = AnyDidMethod::default();
                 let did_doc = resolver.resolve(&did).await.unwrap().document;
                 return Self {
                     did,
