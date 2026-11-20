@@ -91,7 +91,7 @@ pub fn metamask_account(seed: &[u8], index: u32) -> Result<XPrv, WalletError> {
 #[allow(async_fn_in_trait)]
 pub trait WalletTrait<S: Store>: Sized {
     fn new(store: S, password: Option<&str>) -> Result<Self, WalletError>;
-    fn init(&mut self, mnemonic_str: &str, password: Option<&str>) -> Result<(), WalletError>;
+    fn init(&mut self, mnemonic_str: &str, password: Option<&str>) -> Result<String, WalletError>;
     async fn unlock(
         &mut self,
         password: &str,
@@ -124,7 +124,7 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
         })
     }
 
-    fn init(&mut self, mnemonic_str: &str, password: Option<&str>) -> Result<(), WalletError> {
+    fn init(&mut self, mnemonic_str: &str, password: Option<&str>) -> Result<String, WalletError> {
         let mnemonic = Mnemonic::from_str(mnemonic_str).map_err(|_| WalletError::Bip39)?;
         let password = match password {
             Some(p) => p.to_string(),
@@ -134,7 +134,7 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
             .save(&password, &mnemonic)
             .map_err(|_| WalletError::Store)?;
         self.unlocked = None;
-        Ok(())
+        Ok(password)
     }
 
     async fn unlock(
@@ -170,7 +170,9 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
             DIDOptions::Jwk => (ssi::dids::DIDJWK::generate(&public), None),
             DIDOptions::Web(did_string) => {
                 let did_string = did_string.ok_or_else(|| {
-                    WalletError::Other("did:web requires a DID string (e.g. did:web:example.com)".into())
+                    WalletError::Other(
+                        "did:web requires a DID string (e.g. did:web:example.com)".into(),
+                    )
                 })?;
                 if !did_string.starts_with("did:web:") {
                     return Err(WalletError::Other(format!(
@@ -299,10 +301,7 @@ mod tests {
             .await
             .unwrap();
         let did = wallet.card().unwrap().did.as_str();
-        assert!(
-            did.starts_with("did:key:"),
-            "expected did:key, got {did}"
-        );
+        assert!(did.starts_with("did:key:"), "expected did:key, got {did}");
     }
 
     #[tokio::test]
@@ -318,7 +317,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(wallet.card().unwrap().did.as_str(), web);
-        assert!(!wallet.card().unwrap().document.verification_method.is_empty());
+        assert!(
+            !wallet
+                .card()
+                .unwrap()
+                .document
+                .verification_method
+                .is_empty()
+        );
     }
 
     #[tokio::test]

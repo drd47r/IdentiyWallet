@@ -2,6 +2,10 @@
 //!
 //! Handlers are stubs: wire them to [`crate::wallet::WalletTrait`] next.
 
+use crate::keystore::StoreFile;
+use crate::wallet::Wallet;
+use crate::wallet::WalletTrait;
+use bip39::{Language, Mnemonic, WordCount};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
@@ -98,7 +102,10 @@ pub enum DidMethodArg {
 }
 
 impl DidMethodArg {
-    pub fn to_wallet_options(&self, did: Option<String>) -> Result<crate::wallet::DIDOptions, String> {
+    pub fn to_wallet_options(
+        &self,
+        did: Option<String>,
+    ) -> Result<crate::wallet::DIDOptions, String> {
         use crate::wallet::DIDOptions;
         match self {
             Self::Key => Ok(DIDOptions::Key),
@@ -179,7 +186,16 @@ pub enum VerifyCmd {
 pub async fn run(cli: Cli) -> Result<(), String> {
     match cli.command {
         Commands::Init { password } => {
-            println!("[stub] init store={:?} password_set={}", cli.store, password.is_some());
+            let path = cli.store.as_ref().map(|p| p.to_str()).flatten();
+            let pass = password.as_deref();
+            let mut wallet = Wallet::new(StoreFile::default(path), pass).unwrap();
+            let mnemonic = Mnemonic::generate_in(Language::English, WordCount::Words12).unwrap();
+            let result = wallet.init(&mnemonic.to_string(), pass);
+            println!(
+                "[stub] init store={:?} password_set={:?}",
+                cli.store,
+                result.unwrap()
+            );
         }
         Commands::Import { mnemonic, password } => {
             let _ = mnemonic;
