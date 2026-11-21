@@ -77,7 +77,7 @@ fn default_password_generate() -> Result<String, WalletError> {
             .collect()
     }
     let pwd = generate_password(16);
-    println!("Generated password: \n {}", pwd);
+    //println!("Generated password: \n {}", pwd);
     Ok(pwd)
 }
 
@@ -91,6 +91,7 @@ pub fn metamask_account(seed: &[u8], index: u32) -> Result<XPrv, WalletError> {
 #[allow(async_fn_in_trait)]
 pub trait WalletTrait<S: Store>: Sized {
     fn new(store: S, password: Option<&str>) -> Result<Self, WalletError>;
+    fn open(store: S, password: &str) -> Result<Self, WalletError>;
     fn init(&mut self, mnemonic_str: &str, password: Option<&str>) -> Result<String, WalletError>;
     async fn unlock(
         &mut self,
@@ -100,6 +101,7 @@ pub trait WalletTrait<S: Store>: Sized {
     ) -> Result<(), WalletError>;
     fn lock(&mut self);
     fn card(&self) -> Result<&DidCard, WalletError>;
+    fn mnemonic(&self) -> Result<Mnemonic, WalletError>;
     fn public_jwk(&self) -> Result<ssi::JWK, WalletError>;
     fn update_card(&mut self, patch: DidCardUpdate) -> Result<&DidCard, WalletError>;
     async fn handle(&self, request: DidRequest) -> Result<DidResponse, WalletError>;
@@ -118,6 +120,15 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
             .save(&password, &mnemonic)
             .map_err(|_| WalletError::Store)?;
 
+        Ok(Wallet {
+            vault,
+            unlocked: None,
+        })
+    }
+
+    fn open(store: S, password: &str) -> Result<Self, WalletError> {
+        let mut vault = KeyVault::new(store);
+        let _mnemonic = vault.load(password);
         Ok(Wallet {
             vault,
             unlocked: None,
@@ -206,6 +217,13 @@ impl<S: Store> WalletTrait<S> for Wallet<S> {
         self.unlocked
             .as_ref()
             .map(|u| &u.card)
+            .ok_or(WalletError::Locked)
+    }
+
+    fn mnemonic(&self) -> Result<Mnemonic, WalletError> {
+        self.unlocked
+            .as_ref()
+            .map(|u| u.mnemonic.clone())
             .ok_or(WalletError::Locked)
     }
 

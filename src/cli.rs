@@ -48,6 +48,13 @@ pub enum Commands {
         password: Option<String>,
     },
 
+    /// Export the mnemonic from the store
+    Export {
+        /// Output file path (default: stdout)
+        #[arg(long)]
+        password: Option<String>,
+    },
+
     /// Unlock vault and derive identity for this session
     Unlock {
         #[arg(long)]
@@ -191,19 +198,38 @@ pub async fn run(cli: Cli) -> Result<(), String> {
             let mut wallet = Wallet::new(StoreFile::default(path), pass).unwrap();
             let mnemonic = Mnemonic::generate_in(Language::English, WordCount::Words12).unwrap();
             let result = wallet.init(&mnemonic.to_string(), pass);
+            let pass = result.unwrap();
             println!(
                 "[stub] init store={:?} password_set={:?}",
                 cli.store,
-                result.unwrap()
+                if password.is_some() {
+                    "yes"
+                } else {
+                    pass.as_str()
+                },
             );
         }
         Commands::Import { mnemonic, password } => {
-            let _ = mnemonic;
+            let path = cli.store.as_ref().map(|p| p.to_str()).flatten();
+            let pass = password.as_deref();
+            let mut wallet = Wallet::new(StoreFile::default(path), pass).unwrap();
+            let _ = wallet.init(&mnemonic.to_string(), pass);
             println!(
                 "[stub] import store={:?} password_set={}",
                 cli.store,
                 password.is_some()
             );
+        }
+        Commands::Export { password } => {
+            let path = cli.store.as_ref().map(|p| p.to_str()).flatten();
+            let pass = password.as_deref().unwrap();
+            let mut wallet = Wallet::open(StoreFile::default(path), pass).unwrap();
+            if wallet.unlock(pass, 0, None).await.is_ok() {
+                let mnemonic = wallet.mnemonic().unwrap();
+                println!("{mnemonic}");
+            } else {
+                println!("unlock failed");
+            }
         }
         Commands::Unlock {
             password,
