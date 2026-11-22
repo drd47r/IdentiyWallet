@@ -71,7 +71,10 @@ pub enum Commands {
     },
 
     /// Clear unlocked session material
-    Lock,
+    Lock {
+        #[arg(long)]
+        password: String,
+    },
 
     /// Show high-level wallet / identity status
     Status,
@@ -238,13 +241,24 @@ pub async fn run(cli: Cli) -> Result<(), String> {
             did,
         } => {
             let opt = method.to_wallet_options(did)?;
-            let _ = password;
+            let path = cli.store.as_ref().map(|p| p.to_str()).flatten();
+            let pass = password.as_str();
+            let mut wallet = Wallet::open(StoreFile::default(path), pass).unwrap();
+
+            if wallet.unlock(pass, index, Some(opt.clone())).await.is_ok() {
+            } else {
+                println!("unlock failed");
+            }
             println!(
                 "[stub] unlock index={index} method={method:?} opt_ready store={:?} ({opt:?})",
                 cli.store
             );
         }
-        Commands::Lock => {
+        Commands::Lock { password } => {
+            let path = cli.store.as_ref().map(|p| p.to_str()).flatten();
+            let pass = password.as_str();
+            let mut wallet = Wallet::open(StoreFile::default(path), pass).unwrap();
+            wallet.lock();
             println!("[stub] lock");
         }
         Commands::Status => {
