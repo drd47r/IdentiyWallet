@@ -4,6 +4,7 @@
 
 use crate::keystore::StoreFile;
 use crate::wallet::Wallet;
+use crate::wallet::WalletError;
 use crate::wallet::WalletTrait;
 use bip39::{Language, Mnemonic, WordCount};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -22,12 +23,44 @@ pub struct Cli {
     #[arg(long, global = true, env = "IDW_STORE")]
     pub store: Option<PathBuf>,
 
+    /// Unlock index (default: 0)
+    #[arg(long, global = true, env = "IDW_INDEX")]
+    pub index: Option<u32>,
+
     /// Vault password (prefer env in real use)
     #[arg(long, global = true, env = "IDW_PASSWORD")]
     pub password: Option<String>,
 
     #[command(subcommand)]
     pub command: Commands,
+}
+
+impl Cli {
+    pub async fn unlock(
+        &self,
+        didopt: Option<DidMethodArg>,
+        did: Option<String>,
+    ) -> Result<Wallet<StoreFile>, WalletError> {
+        let path = self.store.as_ref().map(|p| p.to_str()).flatten();
+        let pass = self.password.as_deref().unwrap_or("");
+        let mut wallet = Wallet::open(StoreFile::default(path), pass).unwrap();
+
+        let didopt = didopt.map(|m| m.to_wallet_options(did).unwrap());
+        if wallet
+            .unlock(pass, self.index.unwrap_or(0), didopt)
+            .await
+            .is_ok()
+        {
+            println!("unlock succeeded");
+            return Ok(wallet);
+        } else {
+            println!("unlock failed");
+            return Err(WalletError::Locked);
+        }
+    }
+    pub fn lock(&self) -> Result<(), WalletError> {
+        Ok(())
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -56,25 +89,25 @@ pub enum Commands {
     },
 
     /// Unlock vault and derive identity for this session
-    Unlock {
-        #[arg(long)]
-        password: String,
-        /// BIP44 account index (MetaMask path m/44'/60'/0'/0/{index})
-        #[arg(long, default_value_t = 0)]
-        index: u32,
-        /// DID method: `key` (default) or `web` (requires --did)
-        #[arg(long, value_enum, default_value_t = DidMethodArg::Key)]
-        method: DidMethodArg,
-        /// Full DID for `did:web` (e.g. did:web:example.com:user:alice)
-        #[arg(long)]
-        did: Option<String>,
-    },
-
-    /// Clear unlocked session material
-    Lock {
-        #[arg(long)]
-        password: String,
-    },
+    //     Unlock {
+    //         #[arg(long)]
+    //         password: String,
+    //         /// BIP44 account index (MetaMask path m/44'/60'/0'/0/{index})
+    //         #[arg(long, default_value_t = 0)]
+    //         index: u32,
+    //         /// DID method: `key` (default) or `web` (requires --did)
+    //         #[arg(long, value_enum, default_value_t = DidMethodArg::Key)]
+    //         method: DidMethodArg,
+    //         /// Full DID for `did:web` (e.g. did:web:example.com:user:alice)
+    //         #[arg(long)]
+    //         did: Option<String>,
+    //     },
+    //
+    //     /// Clear unlocked session material
+    //     Lock {
+    //         #[arg(long)]
+    //         password: String,
+    //     },
 
     /// Show high-level wallet / identity status
     Status,
@@ -206,7 +239,7 @@ pub async fn run(cli: Cli) -> Result<(), String> {
                 "[stub] init store={:?} password_set={:?}",
                 cli.store,
                 if password.is_some() {
-                    "yes"
+                    "original password"
                 } else {
                     pass.as_str()
                 },
@@ -234,33 +267,33 @@ pub async fn run(cli: Cli) -> Result<(), String> {
                 println!("unlock failed");
             }
         }
-        Commands::Unlock {
-            password,
-            index,
-            method,
-            did,
-        } => {
-            let opt = method.to_wallet_options(did)?;
-            let path = cli.store.as_ref().map(|p| p.to_str()).flatten();
-            let pass = password.as_str();
-            let mut wallet = Wallet::open(StoreFile::default(path), pass).unwrap();
-
-            if wallet.unlock(pass, index, Some(opt.clone())).await.is_ok() {
-            } else {
-                println!("unlock failed");
-            }
-            println!(
-                "[stub] unlock index={index} method={method:?} opt_ready store={:?} ({opt:?})",
-                cli.store
-            );
-        }
-        Commands::Lock { password } => {
-            let path = cli.store.as_ref().map(|p| p.to_str()).flatten();
-            let pass = password.as_str();
-            let mut wallet = Wallet::open(StoreFile::default(path), pass).unwrap();
-            wallet.lock();
-            println!("[stub] lock");
-        }
+        //         Commands::Unlock {
+        //             password,
+        //             index,
+        //             method,
+        //             did,
+        //         } => {
+        //             let opt = method.to_wallet_options(did)?;
+        //             let path = cli.store.as_ref().map(|p| p.to_str()).flatten();
+        //             let pass = password.as_str();
+        //             let mut wallet = Wallet::open(StoreFile::default(path), pass).unwrap();
+        //
+        //             if wallet.unlock(pass, index, Some(opt.clone())).await.is_ok() {
+        //             } else {
+        //                 println!("unlock failed");
+        //             }
+        //             println!(
+        //                 "[stub] unlock index={index} method={method:?} opt_ready store={:?} ({opt:?})",
+        //                 cli.store
+        //             );
+        //         }
+        //         Commands::Lock { password } => {
+        //             let path = cli.store.as_ref().map(|p| p.to_str()).flatten();
+        //             let pass = password.as_str();
+        //             let mut wallet = Wallet::open(StoreFile::default(path), pass).unwrap();
+        //             wallet.lock();
+        //             println!("[stub] lock");
+        //         }
         Commands::Status => {
             println!("[stub] status store={:?}", cli.store);
         }
