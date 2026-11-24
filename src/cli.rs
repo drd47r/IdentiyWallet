@@ -37,11 +37,14 @@ pub struct Cli {
 
 impl Cli {
     pub async fn unlock(
-        &self,
+        &mut self,
         didopt: Option<DidMethodArg>,
         did: Option<String>,
     ) -> Result<Wallet<StoreFile>, WalletError> {
         let path = self.store.as_ref().map(|p| p.to_str()).flatten();
+        if self.password.is_none() {
+            return Err(WalletError::Other("password is required".to_string()));
+        }
         let pass = self.password.as_deref().unwrap_or("");
         let mut wallet = Wallet::open(StoreFile::default(path), pass).unwrap();
 
@@ -82,11 +85,7 @@ pub enum Commands {
     },
 
     /// Export the mnemonic from the store
-    Export {
-        /// Output file path (default: stdout)
-        #[arg(long)]
-        password: Option<String>,
-    },
+    Export {},
 
     /// Unlock vault and derive identity for this session
     //     Unlock {
@@ -226,7 +225,7 @@ pub enum VerifyCmd {
 }
 
 /// Dispatch entrypoint. Replace stubs with wallet calls.
-pub async fn run(cli: Cli) -> Result<(), String> {
+pub async fn run(mut cli: Cli) -> Result<(), String> {
     match cli.command {
         Commands::Init { password } => {
             let path = cli.store.as_ref().map(|p| p.to_str()).flatten();
@@ -256,16 +255,10 @@ pub async fn run(cli: Cli) -> Result<(), String> {
                 password.is_some()
             );
         }
-        Commands::Export { password } => {
-            let path = cli.store.as_ref().map(|p| p.to_str()).flatten();
-            let pass = password.as_deref().unwrap();
-            let mut wallet = Wallet::open(StoreFile::default(path), pass).unwrap();
-            if wallet.unlock(pass, 0, None).await.is_ok() {
-                let mnemonic = wallet.mnemonic().unwrap();
-                println!("{mnemonic}");
-            } else {
-                println!("unlock failed");
-            }
+        Commands::Export {} => {
+            let wallet = cli.unlock(None, None).await.unwrap();
+            let mnemonic = wallet.mnemonic().unwrap();
+            println!("{mnemonic}");
         }
         //         Commands::Unlock {
         //             password,
