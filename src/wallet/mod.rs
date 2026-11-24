@@ -6,8 +6,8 @@ use serde_json::json;
 use ssi_jws::JwsPayload;
 use std::str::FromStr;
 
-mod didcard;
-use didcard::*;
+pub mod didcard;
+pub use didcard::*;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletError {

@@ -3,9 +3,8 @@
 //! Handlers are stubs: wire them to [`crate::wallet::WalletTrait`] next.
 
 use crate::keystore::StoreFile;
-use crate::wallet::Wallet;
-use crate::wallet::WalletError;
-use crate::wallet::WalletTrait;
+use crate::wallet::DidRequest::{self, Authenticate};
+use crate::wallet::{DIDOptions, DidResponse, Wallet, WalletError, WalletTrait};
 use bip39::{Language, Mnemonic, WordCount};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -35,6 +34,17 @@ pub struct Cli {
     pub command: Commands,
 }
 
+impl Clone for Cli {
+    fn clone(&self) -> Self {
+        Self {
+            store: self.store.clone(),
+            index: self.index.clone(),
+            password: self.password.clone(),
+            command: self.command.clone(),
+        }
+    }
+}
+
 impl Cli {
     pub async fn unlock(
         &mut self,
@@ -42,9 +52,9 @@ impl Cli {
         did: Option<String>,
     ) -> Result<Wallet<StoreFile>, WalletError> {
         let path = self.store.as_ref().map(|p| p.to_str()).flatten();
-        if self.password.is_none() {
-            return Err(WalletError::Other("password is required".to_string()));
-        }
+        // if self.password.is_none() {
+        //     return Err(WalletError::Other("password is required".to_string()));
+        // }
         let pass = self.password.as_deref().unwrap_or("");
         let mut wallet = Wallet::open(StoreFile::default(path), pass).unwrap();
 
@@ -66,7 +76,7 @@ impl Cli {
     }
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
     /// Create a new wallet (generate mnemonic + encrypt to store)
     Init {
@@ -165,7 +175,7 @@ impl DidMethodArg {
     }
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum CardCmd {
     /// Print DID, label, and document
     Show,
@@ -184,10 +194,15 @@ pub enum CardCmd {
     Jwk,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum DidCmd {
     /// Resolve / return the current DID document
-    Resolve,
+    Resolve {
+        #[arg(long)]
+        did_buf: Option<String>,
+        #[arg(long)]
+        index: Option<u32>,
+    },
     /// Prove control of the DID (challenge → JWS)
     Authenticate {
         #[arg(long)]
@@ -197,7 +212,7 @@ pub enum DidCmd {
     },
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum SignCmd {
     /// Sign a JSON claims object as JWS
     Claims {
@@ -210,7 +225,7 @@ pub enum SignCmd {
     },
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum VerifyCmd {
     /// Verify a JWS with a public JWK / current wallet key
     Jws {
@@ -226,6 +241,9 @@ pub enum VerifyCmd {
 
 /// Dispatch entrypoint. Replace stubs with wallet calls.
 pub async fn run(mut cli: Cli) -> Result<(), String> {
+    //let mut wallet = cli.unlock(None, None).await.unwrap();
+    //let mut wallet: Wallet<StoreFile>;
+    let mut cl = cli.clone();
     match cli.command {
         Commands::Init { password } => {
             let path = cli.store.as_ref().map(|p| p.to_str()).flatten();
@@ -260,33 +278,6 @@ pub async fn run(mut cli: Cli) -> Result<(), String> {
             let mnemonic = wallet.mnemonic().unwrap();
             println!("{mnemonic}");
         }
-        //         Commands::Unlock {
-        //             password,
-        //             index,
-        //             method,
-        //             did,
-        //         } => {
-        //             let opt = method.to_wallet_options(did)?;
-        //             let path = cli.store.as_ref().map(|p| p.to_str()).flatten();
-        //             let pass = password.as_str();
-        //             let mut wallet = Wallet::open(StoreFile::default(path), pass).unwrap();
-        //
-        //             if wallet.unlock(pass, index, Some(opt.clone())).await.is_ok() {
-        //             } else {
-        //                 println!("unlock failed");
-        //             }
-        //             println!(
-        //                 "[stub] unlock index={index} method={method:?} opt_ready store={:?} ({opt:?})",
-        //                 cli.store
-        //             );
-        //         }
-        //         Commands::Lock { password } => {
-        //             let path = cli.store.as_ref().map(|p| p.to_str()).flatten();
-        //             let pass = password.as_str();
-        //             let mut wallet = Wallet::open(StoreFile::default(path), pass).unwrap();
-        //             wallet.lock();
-        //             println!("[stub] lock");
-        //         }
         Commands::Status => {
             println!("[stub] status store={:?}", cli.store);
         }
@@ -304,14 +295,69 @@ pub async fn run(mut cli: Cli) -> Result<(), String> {
             CardCmd::Jwk => println!("[stub] card jwk"),
         },
         Commands::Did(cmd) => match cmd {
-            DidCmd::Resolve => println!("[stub] did resolve"),
+            DidCmd::Resolve { did_buf, index } => {
+                let did = did_buf.as_deref().clone().unwrap_or("");
+                let index = index.unwrap_or(0);
+                let typer = did[..7].to_lowercase();
+                let mut wallet = cl.unlock(None, None).await.unwrap();
+                match typer.as_str() {
+                    "did:web" => {
+                        let opt = DIDOptions::Web(Some(did.to_string()));
+                        wallet
+                            .unlock(&cli.password.unwrap().split_off(0), index, Some(opt))
+                            .await
+                            .unwrap();
+                        let request = DidRequest::ResolveDid {};
+                        let response: DidResponse = wallet.handle(request).await.unwrap();
+                        println!(
+                            "[stub] did resolve did={did:?} index={index:?} response={response:?}"
+                        );
+                    }
+                    _ => {
+                        let opt = DIDOptions::Key {};
+                        wallet
+                            .unlock(&cli.password.unwrap().split_off(0), index, Some(opt))
+                            .await
+                            .unwrap();
+                        let request = DidRequest::ResolveDid {};
+                        let response: DidResponse = wallet.handle(request).await.unwrap();
+                        println!(
+                            "[stub] did resolve did={did:?} index={index:?} response={response:?}"
+                        );
+                    }
+                }
+            }
             DidCmd::Authenticate { challenge, domain } => {
-                println!("[stub] did authenticate challenge={challenge:?} domain={domain:?}");
+                let request = Authenticate { challenge, domain };
+                let wallet = cl.clone().unlock(None, None).await.unwrap();
+                let signed_claims = wallet.handle(request).await.unwrap();
+                println!("[stub] did authenticate signed={signed_claims:?}");
             }
         },
         Commands::Sign(cmd) => match cmd {
             SignCmd::Claims { json, file } => {
-                println!("[stub] sign claims json={json:?} file={file:?}");
+                if let Some(json_str) = json {
+                    let request = DidRequest::SignClaims {
+                        claims: serde_json::json!(json_str),
+                    };
+                    let wallet = cl.clone().unlock(None, None).await.unwrap();
+                    let signed_claims = wallet.handle(request).await.unwrap();
+                    println!(
+                        "[stub] sign claims json={json_str:?} file={file:?} signed={signed_claims:?}"
+                    );
+                }
+
+                if let Some(file_path) = file {
+                    let json_str = std::fs::read_to_string(&file_path).unwrap();
+                    let request = DidRequest::SignClaims {
+                        claims: serde_json::json!(json_str),
+                    };
+                    let wallet = cl.clone().unlock(None, None).await.unwrap();
+                    let signed_claims = wallet.handle(request).await.unwrap();
+                    println!(
+                        "[stub] sign claims json={json_str:?} file={file_path:?} signed={signed_claims:?}"
+                    );
+                }
             }
         },
         Commands::Verify(cmd) => match cmd {
