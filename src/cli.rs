@@ -17,6 +17,7 @@ use std::path::PathBuf;
     about = "Local DID identity wallet",
     long_about = None
 )]
+#[derive(Clone)]
 pub struct Cli {
     /// Encrypted keystore path (default: /tmp/keystore.ebin)
     #[arg(long, global = true, env = "IDW_STORE")]
@@ -34,17 +35,6 @@ pub struct Cli {
     pub command: Commands,
 }
 
-impl Clone for Cli {
-    fn clone(&self) -> Self {
-        Self {
-            store: self.store.clone(),
-            index: self.index.clone(),
-            password: self.password.clone(),
-            command: self.command.clone(),
-        }
-    }
-}
-
 impl Cli {
     pub async fn unlock(
         &mut self,
@@ -52,9 +42,9 @@ impl Cli {
         did: Option<String>,
     ) -> Result<Wallet<StoreFile>, WalletError> {
         let path = self.store.as_ref().map(|p| p.to_str()).flatten();
-        // if self.password.is_none() {
-        //     return Err(WalletError::Other("password is required".to_string()));
-        // }
+        if self.password.is_none() {
+            return Err(WalletError::Other("password is required".to_string()));
+        }
         let pass = self.password.as_deref().unwrap_or("");
         let mut wallet = Wallet::open(StoreFile::default(path), pass).unwrap();
 
@@ -281,7 +271,7 @@ pub async fn run(mut cli: Cli) -> Result<(), String> {
         Commands::Status => {
             println!("[stub] status store={:?}", cli.store);
         }
-        Commands::Card(cmd) => match cmd {
+        Commands::Card(ref cmd) => match cmd {
             CardCmd::Show => println!("[stub] card show"),
             CardCmd::Update {
                 label,
@@ -296,13 +286,14 @@ pub async fn run(mut cli: Cli) -> Result<(), String> {
         },
         Commands::Did(cmd) => match cmd {
             DidCmd::Resolve { did_buf, index } => {
-                let did = did_buf.as_deref().clone().unwrap_or("");
+                let mut typer = did_buf.as_deref().unwrap_or("did:key");
+                typer = &typer[..7];
                 let index = index.unwrap_or(0);
-                let typer = did[..7].to_lowercase();
                 let mut wallet = cl.unlock(None, None).await.unwrap();
-                match typer.as_str() {
+                match typer {
                     "did:web" => {
-                        let opt = DIDOptions::Web(Some(did.to_string()));
+                        //let opt = DIDOptions::Web(Some(did.to_string()));
+                        let opt = DIDOptions::Web(did_buf.clone());
                         wallet
                             .unlock(&cli.password.unwrap().split_off(0), index, Some(opt))
                             .await
@@ -310,7 +301,7 @@ pub async fn run(mut cli: Cli) -> Result<(), String> {
                         let request = DidRequest::ResolveDid {};
                         let response: DidResponse = wallet.handle(request).await.unwrap();
                         println!(
-                            "[stub] did resolve did={did:?} index={index:?} response={response:?}"
+                            "[stub] did resolve did={did_buf:?} index={index:?} response={response:?}",
                         );
                     }
                     _ => {
@@ -322,7 +313,7 @@ pub async fn run(mut cli: Cli) -> Result<(), String> {
                         let request = DidRequest::ResolveDid {};
                         let response: DidResponse = wallet.handle(request).await.unwrap();
                         println!(
-                            "[stub] did resolve did={did:?} index={index:?} response={response:?}"
+                            "[stub] did resolve did={did_buf:?} index={index:?} response={response:?}"
                         );
                     }
                 }
